@@ -94,49 +94,24 @@ fn schedule_temp_cleanup(path: std::path::PathBuf, delay_secs: u64) {
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use anyhow::{Context, Result, bail};
-    use windows::Win32::Graphics::Printing::*;
-    use windows::Win32::Foundation::*;
+    use anyhow::{Result, bail};
     use windows::core::*;
 
     pub fn list_printers() -> Vec<String> {
-        unsafe { enumerate_printers().unwrap_or_default() }
-    }
-
-    unsafe fn enumerate_printers() -> Result<Vec<String>> {
-        let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
-        let mut needed: u32 = 0;
-        let mut returned: u32 = 0;
-
-        unsafe {
-            let _ = EnumPrintersW(flags, None, 2, None, &mut needed, &mut returned);
+        // Use PowerShell to enumerate printers (avoids unstable Win32 Printing API bindings)
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-Printer | Select-Object -ExpandProperty Name"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_owned())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            }
+            _ => Vec::new(),
         }
-
-        if needed == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut buffer = vec![0u8; needed as usize];
-
-        unsafe {
-            EnumPrintersW(flags, None, 2, Some(&mut buffer), &mut needed, &mut returned)
-                .context("EnumPrintersW failed")?;
-        }
-
-        let infos = unsafe {
-            std::slice::from_raw_parts(
-                buffer.as_ptr() as *const PRINTER_INFO_2W,
-                returned as usize,
-            )
-        };
-
-        let names = infos
-            .iter()
-            .filter(|info| !info.pPrinterName.is_null())
-            .filter_map(|info| unsafe { info.pPrinterName.to_string().ok() })
-            .collect();
-
-        Ok(names)
     }
 
     pub fn print_document(
