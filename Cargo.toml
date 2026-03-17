@@ -1,0 +1,38 @@
+[package]
+name = "print-agent"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight print agent with WebSocket interface and system tray"
+
+[dependencies]
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
+tray-icon = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "fs"] }
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dirs = "6"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+font-kit = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Printing",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
