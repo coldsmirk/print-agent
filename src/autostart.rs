@@ -125,7 +125,7 @@ mod platform {
     pub fn unregister() -> Result<()> {
         let mut hkey = HKEY::default();
         let err = unsafe {
-            RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(REG_RUN_KEY), 0, KEY_WRITE, &mut hkey)
+            RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(REG_RUN_KEY), None, KEY_WRITE, &mut hkey)
         };
         if err.0 == 0 {
             unsafe {
