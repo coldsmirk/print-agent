@@ -72,30 +72,67 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
+    use windows::Win32::System::Registry::*;
+    use windows::core::*;
 
     const REG_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     pub fn register(exe: &Path) -> Result<()> {
-        use std::process::Command;
-
-        let exe_str = exe.to_string_lossy();
-        let status = Command::new("reg")
-            .args(["add", &format!(r"HKCU\{REG_RUN_KEY}"), "/v", APP_NAME, "/d", &exe_str, "/f"])
-            .output()?;
-
-        if status.status.success() {
-            Ok(())
-        } else {
-            anyhow::bail!("reg add failed: {}", String::from_utf8_lossy(&status.stderr))
+        let mut hkey = HKEY::default();
+        let err = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                &HSTRING::from(REG_RUN_KEY),
+                None,
+                None,
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                None,
+                &mut hkey,
+                None,
+            )
+        };
+        if err.0 != 0 {
+            anyhow::bail!("RegCreateKeyExW failed: {err:?}");
         }
+
+        let value: Vec<u16> = exe
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let err = unsafe {
+            RegSetValueExW(
+                hkey,
+                &HSTRING::from(APP_NAME),
+                None,
+                REG_SZ,
+                Some(std::slice::from_raw_parts(
+                    value.as_ptr() as *const u8,
+                    value.len() * 2,
+                )),
+            )
+        };
+        unsafe { let _ = RegCloseKey(hkey); }
+
+        if err.0 != 0 {
+            anyhow::bail!("RegSetValueExW failed: {err:?}");
+        }
+        Ok(())
     }
 
     pub fn unregister() -> Result<()> {
-        use std::process::Command;
-
-        let _ = Command::new("reg")
-            .args(["delete", &format!(r"HKCU\{REG_RUN_KEY}"), "/v", APP_NAME, "/f"])
-            .output();
+        let mut hkey = HKEY::default();
+        let err = unsafe {
+            RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(REG_RUN_KEY), 0, KEY_WRITE, &mut hkey)
+        };
+        if err.0 == 0 {
+            unsafe {
+                let _ = RegDeleteValueW(hkey, &HSTRING::from(APP_NAME));
+                let _ = RegCloseKey(hkey);
+            }
+        }
         Ok(())
     }
 }

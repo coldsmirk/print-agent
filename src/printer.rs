@@ -26,8 +26,16 @@ pub fn list_paper_bins(printer: &str) -> Vec<String> {
         return default_paper_bins();
     }
 
-    let _ = printer;
-    default_paper_bins()
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::list_paper_bins(printer)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = printer;
+        default_paper_bins()
+    }
 }
 
 fn default_paper_bins() -> Vec<String> {
@@ -94,24 +102,108 @@ fn schedule_temp_cleanup(path: std::path::PathBuf, delay_secs: u64) {
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use anyhow::{Result, bail};
+    use anyhow::{Result, Context, bail};
     use windows::core::*;
+    use windows::Win32::Graphics::Printing::*;
+    use windows::Win32::Storage::Xps::{DeviceCapabilitiesW, DC_BINNAMES};
 
     pub fn list_printers() -> Vec<String> {
-        // Use PowerShell to enumerate printers (avoids unstable Win32 Printing API bindings)
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "Get-Printer | Select-Object -ExpandProperty Name"])
-            .output();
-        match output {
-            Ok(out) if out.status.success() => {
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .map(|l| l.trim().to_owned())
-                    .filter(|l| !l.is_empty())
-                    .collect()
-            }
-            _ => Vec::new(),
+        enumerate_printers().unwrap_or_default()
+    }
+
+    fn enumerate_printers() -> Result<Vec<String>> {
+        let mut needed: u32 = 0;
+        let mut returned: u32 = 0;
+
+        // First call to get required buffer size
+        let _ = unsafe {
+            EnumPrintersW(
+                PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+                None,
+                2,
+                None,
+                &mut needed,
+                &mut returned,
+            )
+        };
+
+        if needed == 0 {
+            return Ok(Vec::new());
         }
+
+        let mut buffer = vec![0u8; needed as usize];
+
+        unsafe {
+            EnumPrintersW(
+                PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+                None,
+                2,
+                Some(&mut buffer),
+                &mut needed,
+                &mut returned,
+            )
+            .context("EnumPrintersW failed")?;
+        }
+
+        let infos = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr() as *const PRINTER_INFO_2W,
+                returned as usize,
+            )
+        };
+
+        Ok(infos
+            .iter()
+            .filter(|info| !info.pPrinterName.is_null())
+            .filter_map(|info| unsafe { info.pPrinterName.to_string().ok() })
+            .collect())
+    }
+
+    pub fn list_paper_bins(printer: &str) -> Vec<String> {
+        match query_paper_bins(printer) {
+            Ok(bins) if !bins.is_empty() => bins,
+            _ => super::default_paper_bins(),
+        }
+    }
+
+    fn query_paper_bins(printer: &str) -> Result<Vec<String>> {
+        let printer_w = HSTRING::from(printer);
+
+        let count = unsafe {
+            DeviceCapabilitiesW(&printer_w, None, DC_BINNAMES, None, None)
+        };
+        if count <= 0 {
+            return Ok(Vec::new());
+        }
+
+        // Each bin name is max 24 wchars
+        let mut buf = vec![0u16; count as usize * 24];
+
+        let result = unsafe {
+            DeviceCapabilitiesW(
+                &printer_w,
+                None,
+                DC_BINNAMES,
+                Some(PWSTR(buf.as_mut_ptr())),
+                None,
+            )
+        };
+        if result <= 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut bins = vec!["自动".to_owned()];
+        for i in 0..result as usize {
+            let offset = i * 24;
+            let slice = &buf[offset..offset + 24];
+            let end = slice.iter().position(|&c| c == 0).unwrap_or(24);
+            let name = String::from_utf16_lossy(&slice[..end]).trim().to_owned();
+            if !name.is_empty() {
+                bins.push(name);
+            }
+        }
+
+        Ok(bins)
     }
 
     pub fn print_document(
@@ -129,31 +221,23 @@ mod windows_impl {
         }
 
         super::schedule_temp_cleanup(temp_file, 30);
-
         Ok(())
     }
 
     fn shell_print(file_path: &std::path::Path) -> Result<()> {
         use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
         let operation = HSTRING::from("print");
         let file = HSTRING::from(file_path.to_string_lossy().as_ref());
 
-        unsafe {
-            let result = ShellExecuteW(
-                None,
-                &operation,
-                &file,
-                None,
-                None,
-                windows::Win32::UI::WindowsAndMessaging::SW_HIDE,
-            );
+        let result = unsafe {
+            ShellExecuteW(None, &operation, &file, None, None, SW_HIDE)
+        };
 
-            if result.0 as usize <= 32 {
-                bail!("ShellExecuteW failed with code: {:?}", result.0);
-            }
+        if result.0 as usize <= 32 {
+            bail!("ShellExecuteW failed with code: {:?}", result.0);
         }
-
         Ok(())
     }
 }
