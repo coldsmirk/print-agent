@@ -119,14 +119,9 @@ mod windows_impl {
         let mut needed: u32 = 0;
         let mut returned: u32 = 0;
 
-        let _ = EnumPrintersW(
-            flags,
-            None,
-            2,
-            None,
-            &mut needed,
-            &mut returned,
-        );
+        unsafe {
+            let _ = EnumPrintersW(flags, None, 2, None, &mut needed, &mut returned);
+        }
 
         if needed == 0 {
             return Ok(Vec::new());
@@ -134,25 +129,22 @@ mod windows_impl {
 
         let mut buffer = vec![0u8; needed as usize];
 
-        EnumPrintersW(
-            flags,
-            None,
-            2,
-            Some(&mut buffer),
-            &mut needed,
-            &mut returned,
-        )
-        .context("EnumPrintersW failed")?;
+        unsafe {
+            EnumPrintersW(flags, None, 2, Some(&mut buffer), &mut needed, &mut returned)
+                .context("EnumPrintersW failed")?;
+        }
 
-        let infos = std::slice::from_raw_parts(
-            buffer.as_ptr() as *const PRINTER_INFO_2W,
-            returned as usize,
-        );
+        let infos = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr() as *const PRINTER_INFO_2W,
+                returned as usize,
+            )
+        };
 
         let names = infos
             .iter()
             .filter(|info| !info.pPrinterName.is_null())
-            .filter_map(|info| info.pPrinterName.to_string().ok())
+            .filter_map(|info| unsafe { info.pPrinterName.to_string().ok() })
             .collect();
 
         Ok(names)
@@ -204,18 +196,17 @@ mod windows_impl {
     }
 
     pub fn print_document(
-        printer: &str,
+        _printer: &str,
         data: &[u8],
         file_format: &str,
-        duplex: bool,
+        _duplex: bool,
         copies: u32,
     ) -> Result<()> {
         let ext = super::format_extension(file_format);
         let temp_file = super::write_temp_file(data, ext)?;
 
-        // ShellExecuteW doesn't support copies natively, submit multiple times
         for _ in 0..copies.max(1) {
-            shell_print(&temp_file, printer)?;
+            shell_print(&temp_file)?;
         }
 
         super::schedule_temp_cleanup(temp_file, 30);
@@ -223,7 +214,7 @@ mod windows_impl {
         Ok(())
     }
 
-    fn shell_print(file_path: &std::path::Path, _printer: &str) -> Result<()> {
+    fn shell_print(file_path: &std::path::Path) -> Result<()> {
         use windows::Win32::UI::Shell::ShellExecuteW;
 
         let operation = HSTRING::from("print");

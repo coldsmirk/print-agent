@@ -18,7 +18,7 @@ jobs:
             os: macos-latest
             name: macOS-arm64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             name: macOS-x64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
