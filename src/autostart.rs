@@ -76,59 +76,26 @@ mod platform {
     const REG_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     pub fn register(exe: &Path) -> Result<()> {
-        use windows::Win32::System::Registry::*;
-        use windows::core::*;
+        use std::process::Command;
 
-        let key = unsafe {
-            let mut hkey = HKEY::default();
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                &HSTRING::from(REG_RUN_KEY),
-                0,
-                None,
-                REG_OPTION_NON_VOLATILE,
-                KEY_WRITE,
-                None,
-                &mut hkey,
-                None,
-            )?;
-            hkey
-        };
+        let exe_str = exe.to_string_lossy();
+        let status = Command::new("reg")
+            .args(["add", &format!(r"HKCU\{REG_RUN_KEY}"), "/v", APP_NAME, "/d", &exe_str, "/f"])
+            .output()?;
 
-        let value: Vec<u16> = exe
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-
-        unsafe {
-            RegSetValueExW(
-                key,
-                &HSTRING::from(APP_NAME),
-                0,
-                REG_SZ,
-                Some(std::slice::from_raw_parts(
-                    value.as_ptr() as *const u8,
-                    value.len() * 2,
-                )),
-            )?;
-            RegCloseKey(key)?;
+        if status.status.success() {
+            Ok(())
+        } else {
+            anyhow::bail!("reg add failed: {}", String::from_utf8_lossy(&status.stderr))
         }
-
-        Ok(())
     }
 
     pub fn unregister() -> Result<()> {
-        use windows::Win32::System::Registry::*;
-        use windows::core::*;
+        use std::process::Command;
 
-        unsafe {
-            let mut hkey = HKEY::default();
-            if RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(REG_RUN_KEY), 0, KEY_WRITE, &mut hkey).is_ok() {
-                let _ = RegDeleteValueW(hkey, &HSTRING::from(APP_NAME));
-                RegCloseKey(hkey)?;
-            }
-        }
+        let _ = Command::new("reg")
+            .args(["delete", &format!(r"HKCU\{REG_RUN_KEY}"), "/v", APP_NAME, "/f"])
+            .output();
         Ok(())
     }
 }

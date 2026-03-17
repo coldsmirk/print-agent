@@ -26,19 +26,8 @@ pub fn list_paper_bins(printer: &str) -> Vec<String> {
         return default_paper_bins();
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::list_paper_bins(printer).unwrap_or_else(|e| {
-            tracing::warn!("Failed to query paper bins for '{printer}': {e}");
-            default_paper_bins()
-        })
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = printer;
-        default_paper_bins()
-    }
+    let _ = printer;
+    default_paper_bins()
 }
 
 fn default_paper_bins() -> Vec<String> {
@@ -148,51 +137,6 @@ mod windows_impl {
             .collect();
 
         Ok(names)
-    }
-
-    pub fn list_paper_bins(printer: &str) -> Result<Vec<String>> {
-        use windows::Win32::Graphics::Gdi::DeviceCapabilitiesW;
-        use windows::Win32::Graphics::Printing::DC_BINNAMES;
-
-        let printer_w = HSTRING::from(printer);
-
-        unsafe {
-            let count = DeviceCapabilitiesW(&printer_w, None, DC_BINNAMES, None, None);
-            if count <= 0 {
-                return Ok(super::default_paper_bins());
-            }
-
-            // Each bin name is max 24 wchars
-            let buf_len = count as usize * 24;
-            let mut buf = vec![0u16; buf_len];
-
-            let result = DeviceCapabilitiesW(
-                &printer_w,
-                None,
-                DC_BINNAMES,
-                Some(PWSTR(buf.as_mut_ptr())),
-                None,
-            );
-
-            if result <= 0 {
-                return Ok(super::default_paper_bins());
-            }
-
-            let mut bins = vec!["自动".to_owned()];
-            for i in 0..result as usize {
-                let offset = i * 24;
-                let slice = &buf[offset..offset + 24];
-                let name = String::from_utf16_lossy(
-                    &slice[..slice.iter().position(|&c| c == 0).unwrap_or(24)],
-                );
-                let name = name.trim().to_owned();
-                if !name.is_empty() {
-                    bins.push(name);
-                }
-            }
-
-            Ok(bins)
-        }
     }
 
     pub fn print_document(
