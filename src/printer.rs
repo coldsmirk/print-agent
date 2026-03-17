@@ -26,16 +26,9 @@ pub fn list_paper_bins(printer: &str) -> Vec<String> {
         return default_paper_bins();
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::list_paper_bins(printer)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = printer;
-        default_paper_bins()
-    }
+    // TODO: query real paper bins via Win32 DeviceCapabilitiesW when API stabilizes
+    let _ = printer;
+    default_paper_bins()
 }
 
 fn default_paper_bins() -> Vec<String> {
@@ -105,7 +98,6 @@ mod windows_impl {
     use anyhow::{Result, Context, bail};
     use windows::core::*;
     use windows::Win32::Graphics::Printing::*;
-    use windows::Win32::Storage::Xps::{DeviceCapabilitiesW, DC_BINNAMES};
 
     pub fn list_printers() -> Vec<String> {
         enumerate_printers().unwrap_or_default()
@@ -157,53 +149,6 @@ mod windows_impl {
             .filter(|info| !info.pPrinterName.is_null())
             .filter_map(|info| unsafe { info.pPrinterName.to_string().ok() })
             .collect())
-    }
-
-    pub fn list_paper_bins(printer: &str) -> Vec<String> {
-        match query_paper_bins(printer) {
-            Ok(bins) if !bins.is_empty() => bins,
-            _ => super::default_paper_bins(),
-        }
-    }
-
-    fn query_paper_bins(printer: &str) -> Result<Vec<String>> {
-        let printer_w = HSTRING::from(printer);
-
-        let count = unsafe {
-            DeviceCapabilitiesW(&printer_w, None, DC_BINNAMES, None, None)
-        };
-        if count <= 0 {
-            return Ok(Vec::new());
-        }
-
-        // Each bin name is max 24 wchars
-        let mut buf = vec![0u16; count as usize * 24];
-
-        let result = unsafe {
-            DeviceCapabilitiesW(
-                &printer_w,
-                None,
-                DC_BINNAMES,
-                Some(PWSTR(buf.as_mut_ptr())),
-                None,
-            )
-        };
-        if result <= 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut bins = vec!["自动".to_owned()];
-        for i in 0..result as usize {
-            let offset = i * 24;
-            let slice = &buf[offset..offset + 24];
-            let end = slice.iter().position(|&c| c == 0).unwrap_or(24);
-            let name = String::from_utf16_lossy(&slice[..end]).trim().to_owned();
-            if !name.is_empty() {
-                bins.push(name);
-            }
-        }
-
-        Ok(bins)
     }
 
     pub fn print_document(
