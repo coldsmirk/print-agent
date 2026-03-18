@@ -155,15 +155,72 @@ mod windows_impl {
         printer: &str,
         data: &[u8],
         file_format: &str,
-        _duplex: bool,
-        _copies: u32,
+        duplex: bool,
+        copies: u32,
     ) -> Result<()> {
         let ext = super::format_extension(file_format);
         let temp_file = super::write_temp_file(data, ext)?;
 
-        // TODO: set duplex/copies via DEVMODE when windows-rs v0.62 API is validated on Windows
+        if let Err(e) = set_printer_devmode(printer, duplex, copies) {
+            tracing::warn!("Failed to set printer DEVMODE: {e}");
+        }
+
         printto(&temp_file, printer)?;
         super::schedule_temp_cleanup(temp_file, 60);
+        Ok(())
+    }
+
+    fn set_printer_devmode(printer: &str, duplex: bool, copies: u32) -> Result<()> {
+        use windows::Win32::Graphics::Gdi::*;
+
+        let printer_name = HSTRING::from(printer);
+        let mut handle = PRINTER_HANDLE::default();
+        unsafe {
+            OpenPrinterW(&printer_name, &mut handle, None)
+                .context("OpenPrinterW failed")?;
+        }
+
+        // Query required buffer size (fmode = 0)
+        let size = unsafe {
+            DocumentPropertiesW(None, handle, &printer_name, None, None, 0)
+        };
+        if size <= 0 {
+            unsafe { let _ = ClosePrinter(handle); }
+            bail!("DocumentPropertiesW size query failed");
+        }
+
+        let mut buf = vec![0u8; size as usize];
+        let dm = buf.as_mut_ptr() as *mut DEVMODEW;
+
+        // Get current DEVMODE
+        let ret = unsafe {
+            DocumentPropertiesW(None, handle, &printer_name, Some(dm), None, DM_OUT_BUFFER.0)
+        };
+        if ret < 0 {
+            unsafe { let _ = ClosePrinter(handle); }
+            bail!("DocumentPropertiesW get failed");
+        }
+
+        // Modify duplex and copies
+        unsafe {
+            (*dm).dmFields |= DM_DUPLEX | DM_COPIES;
+            (*dm).dmDuplex = if duplex { DMDUP_VERTICAL } else { DMDUP_SIMPLEX };
+            (*dm).Anonymous1.Anonymous1.dmCopies = copies.min(999) as i16;
+        }
+
+        // Apply modified DEVMODE
+        let ret = unsafe {
+            DocumentPropertiesW(
+                None, handle, &printer_name,
+                Some(dm), Some(dm as *const _),
+                (DM_IN_BUFFER | DM_OUT_BUFFER).0,
+            )
+        };
+        unsafe { let _ = ClosePrinter(handle); }
+
+        if ret < 0 {
+            bail!("DocumentPropertiesW apply failed");
+        }
         Ok(())
     }
 
