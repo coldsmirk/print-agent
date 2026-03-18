@@ -22,6 +22,8 @@ pub struct PrintAgentApp {
     style_initialized: bool,
     settings_open: Option<usize>,
     running_port: u16,
+    /// Saved window position before hiding (Windows workaround)
+    saved_position: Option<egui::Pos2>,
     port_text: String,
 }
 
@@ -46,6 +48,7 @@ impl PrintAgentApp {
             settings_open: None,
             running_port: port,
             port_text: port.to_string(),
+            saved_position: None,
         }
     }
 
@@ -74,8 +77,9 @@ impl PrintAgentApp {
         self.edit_config = self.config.lock().unwrap().clone();
         self.port_text = self.edit_config.port.to_string();
         if cfg!(target_os = "windows") {
-            // On Windows, restore from off-screen position
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+            // Restore to saved position (Windows: off-screen workaround for winit WM_PAINT issue)
+            let pos = self.saved_position.unwrap_or(egui::pos2(100.0, 100.0));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
@@ -85,7 +89,8 @@ impl PrintAgentApp {
     fn hide_window(&mut self, ctx: &egui::Context) {
         self.visible = false;
         if cfg!(target_os = "windows") {
-            // On Windows, move off-screen instead of Visible(false) to keep the event loop alive
+            // Save current position, then move off-screen to keep winit event loop alive
+            self.saved_position = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(-10000.0, -10000.0)));
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
