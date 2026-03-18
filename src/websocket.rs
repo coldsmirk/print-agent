@@ -108,7 +108,10 @@ async fn handle_print_request(text: &str, config: &Arc<Mutex<AppConfig>>) -> Pri
     let duplex = req.duplex.unwrap_or(default_settings.duplex);
     let copies = req.copies.unwrap_or(default_settings.copies);
 
-    let file_bytes = if let Some(data) = &req.file_data {
+    let file_data = req.file_data.as_deref().filter(|s| !s.is_empty());
+    let file_url = req.file_url.as_deref().filter(|s| !s.is_empty());
+
+    let file_bytes = if let Some(data) = file_data {
         match base64::engine::general_purpose::STANDARD.decode(data) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -118,7 +121,7 @@ async fn handle_print_request(text: &str, config: &Arc<Mutex<AppConfig>>) -> Pri
                 };
             }
         }
-    } else if let Some(url) = &req.file_url {
+    } else if let Some(url) = file_url {
         match fetch_file(url).await {
             Ok(bytes) => bytes,
             Err(e) => {
