@@ -161,12 +161,11 @@ mod windows_impl {
         let ext = super::format_extension(file_format);
         let temp_file = super::write_temp_file(data, ext)?;
 
-        // Set printer preferences (duplex, copies) via DEVMODE before printing
         if let Err(e) = set_printer_preferences(printer, duplex, copies) {
             tracing::warn!("Failed to set printer preferences: {e}");
         }
 
-        shell_print(&temp_file)?;
+        printto(&temp_file, printer)?;
         super::schedule_temp_cleanup(temp_file, 60);
         Ok(())
     }
@@ -250,81 +249,21 @@ mod windows_impl {
         Ok(())
     }
 
-    /// Send raw data to printer via Print Spooler API (silent, no UI)
-    fn spooler_print(printer: &str, data: &[u8], data_type: &str) -> Result<()> {
-        let printer_name = HSTRING::from(printer);
-        let mut handle = PRINTER_HANDLE::default();
-
-        unsafe {
-            OpenPrinterW(&printer_name, &mut handle, None)
-                .context("OpenPrinterW failed")?;
-        }
-
-        // Map format to spooler data type
-        let spool_type = match data_type {
-            "PDF" => "RAW",
-            _ => "RAW", // Images also sent as RAW; printer handles rendering
-        };
-
-        let doc_name = HSTRING::from("PrintAgent Job");
-        let data_type_w = HSTRING::from(spool_type);
-        let doc_info = DOC_INFO_1W {
-            pDocName: PWSTR(doc_name.as_ptr() as *mut _),
-            pOutputFile: PWSTR::null(),
-            pDatatype: PWSTR(data_type_w.as_ptr() as *mut _),
-        };
-
-        let job_id = unsafe { StartDocPrinterW(handle, 1, &doc_info as *const _ as *const _) };
-        if job_id == 0 {
-            unsafe { let _ = ClosePrinter(handle); }
-            bail!("StartDocPrinterW failed");
-        }
-
-        let page_ok = unsafe { StartPagePrinter(handle) };
-        if !page_ok.as_bool() {
-            unsafe {
-                EndDocPrinter(handle);
-                let _ = ClosePrinter(handle);
-            }
-            bail!("StartPagePrinter failed");
-        }
-
-        let mut written: u32 = 0;
-        let write_ok = unsafe {
-            WritePrinter(
-                handle,
-                data.as_ptr() as *const _,
-                data.len() as u32,
-                &mut written,
-            )
-        };
-
-        unsafe {
-            EndPagePrinter(handle);
-            EndDocPrinter(handle);
-            let _ = ClosePrinter(handle);
-        }
-
-        if !write_ok.as_bool() {
-            bail!("WritePrinter failed");
-        }
-
-        Ok(())
-    }
-
-    fn shell_print(file_path: &std::path::Path) -> Result<()> {
+    /// Use "printto" verb to print to a specific printer with SW_HIDE
+    fn printto(file_path: &std::path::Path, printer: &str) -> Result<()> {
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-        let operation = HSTRING::from("print");
+        let verb = HSTRING::from("printto");
         let file = HSTRING::from(file_path.to_string_lossy().as_ref());
+        let printer_param = HSTRING::from(format!("\"{printer}\""));
 
         let result = unsafe {
-            ShellExecuteW(None, &operation, &file, None, None, SW_HIDE)
+            ShellExecuteW(None, &verb, &file, &printer_param, None, SW_HIDE)
         };
 
         if result.0 as usize <= 32 {
-            bail!("ShellExecuteW failed with code: {:?}", result.0);
+            bail!("ShellExecuteW printto failed with code: {:?}", result.0);
         }
         Ok(())
     }
