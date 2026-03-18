@@ -152,20 +152,93 @@ mod windows_impl {
     }
 
     pub fn print_document(
-        _printer: &str,
+        printer: &str,
         data: &[u8],
         file_format: &str,
         _duplex: bool,
         copies: u32,
     ) -> Result<()> {
-        let ext = super::format_extension(file_format);
-        let temp_file = super::write_temp_file(data, ext)?;
+        let fmt = file_format.to_uppercase();
+        match fmt.as_str() {
+            "PDF" | "PNG" | "JPG" | "JPEG" | "BMP" | "GIF" => {
+                // RAW spooler print: silent, no application window
+                for _ in 0..copies.max(1) {
+                    spooler_print(printer, data, &fmt)?;
+                }
+                Ok(())
+            }
+            _ => {
+                // Fallback: ShellExecuteW for formats that need an application to render
+                let ext = super::format_extension(file_format);
+                let temp_file = super::write_temp_file(data, ext)?;
+                for _ in 0..copies.max(1) {
+                    shell_print(&temp_file)?;
+                }
+                super::schedule_temp_cleanup(temp_file, 30);
+                Ok(())
+            }
+        }
+    }
 
-        for _ in 0..copies.max(1) {
-            shell_print(&temp_file)?;
+    /// Send raw data to printer via Print Spooler API (silent, no UI)
+    fn spooler_print(printer: &str, data: &[u8], data_type: &str) -> Result<()> {
+        let printer_name = HSTRING::from(printer);
+        let mut handle = PRINTER_HANDLE::default();
+
+        unsafe {
+            OpenPrinterW(&printer_name, &mut handle, None)
+                .context("OpenPrinterW failed")?;
         }
 
-        super::schedule_temp_cleanup(temp_file, 30);
+        // Map format to spooler data type
+        let spool_type = match data_type {
+            "PDF" => "RAW",
+            _ => "RAW", // Images also sent as RAW; printer handles rendering
+        };
+
+        let doc_name = HSTRING::from("PrintAgent Job");
+        let data_type_w = HSTRING::from(spool_type);
+        let doc_info = DOC_INFO_1W {
+            pDocName: PWSTR(doc_name.as_ptr() as *mut _),
+            pOutputFile: PWSTR::null(),
+            pDatatype: PWSTR(data_type_w.as_ptr() as *mut _),
+        };
+
+        let job_id = unsafe { StartDocPrinterW(handle, 1, &doc_info as *const _ as *const _) };
+        if job_id == 0 {
+            unsafe { let _ = ClosePrinter(handle); }
+            bail!("StartDocPrinterW failed");
+        }
+
+        let page_ok = unsafe { StartPagePrinter(handle) };
+        if !page_ok.as_bool() {
+            unsafe {
+                EndDocPrinter(handle);
+                let _ = ClosePrinter(handle);
+            }
+            bail!("StartPagePrinter failed");
+        }
+
+        let mut written: u32 = 0;
+        let write_ok = unsafe {
+            WritePrinter(
+                handle,
+                data.as_ptr() as *const _,
+                data.len() as u32,
+                &mut written,
+            )
+        };
+
+        unsafe {
+            EndPagePrinter(handle);
+            EndDocPrinter(handle);
+            let _ = ClosePrinter(handle);
+        }
+
+        if !write_ok.as_bool() {
+            bail!("WritePrinter failed");
+        }
+
         Ok(())
     }
 
