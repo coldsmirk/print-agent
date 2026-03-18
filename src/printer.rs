@@ -229,18 +229,27 @@ mod windows_impl {
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-        let verb = HSTRING::from("printto");
         let file = HSTRING::from(file_path.to_string_lossy().as_ref());
         let printer_param = HSTRING::from(format!("\"{printer}\""));
 
+        // Try "printto" first (specifies printer, quieter)
         let result = unsafe {
-            ShellExecuteW(None, &verb, &file, &printer_param, None, SW_HIDE)
+            ShellExecuteW(None, &HSTRING::from("printto"), &file, &printer_param, None, SW_HIDE)
         };
-
-        if result.0 as usize <= 32 {
-            bail!("ShellExecuteW printto failed with code: {:?}", result.0);
+        if result.0 as usize > 32 {
+            return Ok(());
         }
-        Ok(())
+
+        // Fallback to "print" if "printto" is not registered for this file type
+        tracing::info!("printto not supported, falling back to print verb");
+        let result = unsafe {
+            ShellExecuteW(None, &HSTRING::from("print"), &file, None, None, SW_HIDE)
+        };
+        if result.0 as usize > 32 {
+            return Ok(());
+        }
+
+        bail!("ShellExecuteW failed with code: {:?}", result.0);
     }
 }
 
