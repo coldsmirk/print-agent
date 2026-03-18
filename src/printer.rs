@@ -41,28 +41,43 @@ fn default_paper_bins() -> Vec<String> {
     ]
 }
 
-pub fn print_document(
+/// Print from file bytes. Writes to temp file then prints.
+pub fn print_bytes(
     printer: &str,
     data: &[u8],
     file_format: &str,
     duplex: bool,
     copies: u32,
 ) -> Result<()> {
+    let ext = format_extension(file_format);
+    let temp = write_temp_file(data, ext)?;
+    let result = print_file(printer, &temp, duplex, copies);
+    schedule_temp_cleanup(temp, 60);
+    result
+}
+
+/// Print an existing file on disk.
+pub fn print_file(
+    printer: &str,
+    path: &std::path::Path,
+    duplex: bool,
+    copies: u32,
+) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        windows_impl::print_document(printer, data, file_format, duplex, copies)
+        windows_impl::print_file(printer, path, duplex, copies)
     }
 
     #[cfg(target_os = "macos")]
     {
-        macos_impl::print_document(printer, data, file_format, duplex, copies)
+        macos_impl::print_file(printer, path, duplex, copies)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         tracing::info!(
-            "Mock print: printer={printer}, format={file_format}, duplex={duplex}, copies={copies}, size={}bytes",
-            data.len()
+            "Mock print: printer={printer}, file={}, duplex={duplex}, copies={copies}",
+            path.display()
         );
         Ok(())
     }
@@ -151,23 +166,16 @@ mod windows_impl {
             .collect())
     }
 
-    pub fn print_document(
+    pub fn print_file(
         printer: &str,
-        data: &[u8],
-        file_format: &str,
+        path: &std::path::Path,
         duplex: bool,
         copies: u32,
     ) -> Result<()> {
-        let ext = super::format_extension(file_format);
-        let temp_file = super::write_temp_file(data, ext)?;
-
         if let Err(e) = set_printer_devmode(printer, duplex, copies) {
             tracing::warn!("Failed to set printer DEVMODE: {e}");
         }
-
-        printto(&temp_file, printer)?;
-        super::schedule_temp_cleanup(temp_file, 60);
-        Ok(())
+        shell_print(path, printer)
     }
 
     fn set_printer_devmode(printer: &str, duplex: bool, copies: u32) -> Result<()> {
@@ -274,27 +282,21 @@ mod macos_impl {
         }
     }
 
-    pub fn print_document(
+    pub fn print_file(
         printer: &str,
-        data: &[u8],
-        file_format: &str,
+        path: &std::path::Path,
         duplex: bool,
         copies: u32,
     ) -> Result<()> {
-        let ext = super::format_extension(file_format);
-        let temp_file = super::write_temp_file(data, ext)?;
-
         let mut cmd = Command::new("lp");
         cmd.arg("-d").arg(printer);
         cmd.arg("-n").arg(copies.max(1).to_string());
         if duplex {
             cmd.arg("-o").arg("sides=two-sided-long-edge");
         }
-        cmd.arg(&temp_file);
+        cmd.arg(path);
 
         let output = cmd.output()?;
-
-        super::schedule_temp_cleanup(temp_file, 10);
 
         if output.status.success() {
             tracing::info!("macOS lp print submitted to {printer}");

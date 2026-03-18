@@ -110,10 +110,12 @@ async fn handle_print_request(text: &str, config: &Arc<Mutex<AppConfig>>) -> Pri
 
     let file_data = req.file_data.as_deref().filter(|s| !s.is_empty());
     let file_url = req.file_url.as_deref().filter(|s| !s.is_empty());
+    let file_format = req.file_format.as_deref().unwrap_or("PDF");
 
-    let file_bytes = if let Some(data) = file_data {
+    // Determine print path: local file directly, or bytes via temp file
+    let print_result = if let Some(data) = file_data {
         match base64::engine::general_purpose::STANDARD.decode(data) {
-            Ok(bytes) => bytes,
+            Ok(bytes) => printer::print_bytes(&printer_name, &bytes, file_format, duplex, copies),
             Err(e) => {
                 return PrintResponse {
                     success: false,
@@ -122,14 +124,19 @@ async fn handle_print_request(text: &str, config: &Arc<Mutex<AppConfig>>) -> Pri
             }
         }
     } else if let Some(url) = file_url {
-        match fetch_file(url).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return PrintResponse {
-                    success: false,
-                    message: format!("获取文件失败: {e}"),
-                };
+        if url.starts_with("http://") || url.starts_with("https://") {
+            match fetch_file(url).await {
+                Ok(bytes) => printer::print_bytes(&printer_name, &bytes, file_format, duplex, copies),
+                Err(e) => {
+                    return PrintResponse {
+                        success: false,
+                        message: format!("获取文件失败: {e}"),
+                    };
+                }
             }
+        } else {
+            // Local file path: print directly without copying
+            printer::print_file(&printer_name, std::path::Path::new(url), duplex, copies)
         }
     } else {
         return PrintResponse {
@@ -138,9 +145,7 @@ async fn handle_print_request(text: &str, config: &Arc<Mutex<AppConfig>>) -> Pri
         };
     };
 
-    let file_format = req.file_format.as_deref().unwrap_or("PDF");
-
-    match printer::print_document(&printer_name, &file_bytes, file_format, duplex, copies) {
+    match print_result {
         Ok(()) => {
             tracing::info!("Print job submitted to {printer_name}");
             PrintResponse {
