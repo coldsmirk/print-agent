@@ -55,13 +55,21 @@ fn main() -> eframe::Result<()> {
         width: icon_w,
         height: icon_h,
     };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([960.0, 560.0])
+        .with_resizable(false)
+        .with_title("打印代理 - 配置")
+        .with_icon(Arc::new(window_icon));
+
+    if cfg!(target_os = "windows") {
+        // On Windows, start off-screen to keep event loop alive for tray icon events
+        viewport = viewport.with_position(egui::pos2(-10000.0, -10000.0));
+    } else {
+        viewport = viewport.with_visible(false);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([960.0, 560.0])
-            .with_resizable(false)
-            .with_visible(false)
-            .with_title("打印代理 - 配置")
-            .with_icon(Arc::new(window_icon)),
+        viewport,
         ..Default::default()
     };
 

@@ -73,13 +73,23 @@ impl PrintAgentApp {
         self.visible = true;
         self.edit_config = self.config.lock().unwrap().clone();
         self.port_text = self.edit_config.port.to_string();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        if cfg!(target_os = "windows") {
+            // On Windows, restore from off-screen position
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     fn hide_window(&mut self, ctx: &egui::Context) {
         self.visible = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if cfg!(target_os = "windows") {
+            // On Windows, move off-screen instead of Visible(false) to keep the event loop alive
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(-10000.0, -10000.0)));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
     }
 
     fn save_config(&mut self) {
