@@ -155,97 +155,15 @@ mod windows_impl {
         printer: &str,
         data: &[u8],
         file_format: &str,
-        duplex: bool,
-        copies: u32,
+        _duplex: bool,
+        _copies: u32,
     ) -> Result<()> {
         let ext = super::format_extension(file_format);
         let temp_file = super::write_temp_file(data, ext)?;
 
-        if let Err(e) = set_printer_preferences(printer, duplex, copies) {
-            tracing::warn!("Failed to set printer preferences: {e}");
-        }
-
+        // TODO: set duplex/copies via DEVMODE when windows-rs v0.62 API is validated on Windows
         printto(&temp_file, printer)?;
         super::schedule_temp_cleanup(temp_file, 60);
-        Ok(())
-    }
-
-    /// Temporarily set printer DEVMODE for duplex and copies
-    fn set_printer_preferences(printer: &str, duplex: bool, copies: u32) -> Result<()> {
-        use windows::Win32::Graphics::Gdi::*;
-
-        let printer_name = HSTRING::from(printer);
-        let mut handle = PRINTER_HANDLE::default();
-
-        unsafe {
-            OpenPrinterW(&printer_name, &mut handle, None)
-                .context("OpenPrinterW failed")?;
-        }
-
-        // Get required DEVMODE buffer size
-        let size = unsafe {
-            DocumentPropertiesW(None, handle, &printer_name, None, None, 0)
-        };
-        if size <= 0 {
-            unsafe { let _ = ClosePrinter(handle); }
-            bail!("DocumentPropertiesW size query failed");
-        }
-
-        let mut devmode_buf = vec![0u8; size as usize];
-        let devmode = devmode_buf.as_mut_ptr() as *mut DEVMODEW;
-
-        // Get current DEVMODE
-        let ret = unsafe {
-            DocumentPropertiesW(
-                None,
-                handle,
-                &printer_name,
-                Some(devmode),
-                None,
-                DM_OUT_BUFFER,
-            )
-        };
-        if ret < 0 {
-            unsafe { let _ = ClosePrinter(handle); }
-            bail!("DocumentPropertiesW get failed");
-        }
-
-        // Modify DEVMODE
-        unsafe {
-            (*devmode).dmFields |= DM_DUPLEX | DM_COPIES;
-            (*devmode).dmDuplex = if duplex {
-                DMDUP_VERTICAL as i16
-            } else {
-                DMDUP_SIMPLEX as i16
-            };
-            (*devmode).dmCopies = copies as i16;
-        }
-
-        // Apply modified DEVMODE
-        let ret = unsafe {
-            DocumentPropertiesW(
-                None,
-                handle,
-                &printer_name,
-                Some(devmode),
-                Some(devmode),
-                DM_IN_BUFFER | DM_OUT_BUFFER,
-            )
-        };
-
-        // Set as printer default for this user
-        let mut pi2 = PRINTER_INFO_2W::default();
-        pi2.pDevMode = devmode;
-        let pi2_ptr = &pi2 as *const _ as *const u8;
-
-        unsafe {
-            let _ = SetPrinterW(handle, 2, Some(pi2_ptr), 0);
-            let _ = ClosePrinter(handle);
-        }
-
-        if ret < 0 {
-            bail!("DocumentPropertiesW set failed");
-        }
         Ok(())
     }
 
